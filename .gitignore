@@ -1,0 +1,6 @@
+mlflow_data/
+duck_ml.log
+.env
+minio_data/
+certbot_data/
+
