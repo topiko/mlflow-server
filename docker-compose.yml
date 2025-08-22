@@ -26,7 +26,7 @@ services:
     command: server /data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
+      interval: 10s
       timeout: 20s
       retries: 3
 
@@ -46,24 +46,21 @@ services:
 
   init-minio:
     image: minio/mc
-    user: "1001:1001"
+    entrypoint: ["/bin/sh","-c"]
+    command: ["./init-minio.sh"]
     depends_on:
-      - minio
-    entrypoint: >
-      sh -c "
-        echo 'Waiting for MinIO...';
-        sleep 5;
-        mc alias set localminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
-        mc mb --ignore-existing localminio/${MINIO_BUCKET_NAME};
-        echo 'Buckets on localminio:';
-        mc ls localminio;
-      "
-    networks:
-      - backend
+      minio:
+        condition: service_healthy
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-      - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME}
+      MC_HOST_local: "http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000"
+      MINIO_BUCKET_NAME: "${MINIO_BUCKET_NAME}"
+    volumes:
+      - ./init-minio.sh:/init-minio.sh:ro
+    working_dir: /
+    networks:
+      - backend     # <<< same network as minio
+    restart: "no"
+
 
   postgres:
     image: postgres:14

@@ -122,6 +122,11 @@ MINIO_CONSOLE_ADDRESS=:9001
 MINIO_PORT=9000
 MINIO_CONSOLE_PORT=9001
 
+# Postgres
+POSTGRES_USER=<postgres_user>
+POSTGRES_PASSWORD=<postgres_pass>
+POSTGRES_DB=mlflowdb
+
 # Certbot / Porkbun
 PORKBUN_API_KEY=<your_porkbun_api_key>
 PORKBUN_API_SECRET=<your_porkbun_api_secret>
