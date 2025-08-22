@@ -3,4 +3,5 @@ duck_ml.log
 .env
 minio_data/
 certbot_data/
+certbot_log/
 

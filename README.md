@@ -69,7 +69,6 @@ Ensure the container runs with correct UID/GID (match your local user: id -u, id
 
 Initialize bucket -> see the service in `docker-compose.yml`
 
-
 You should see a mlflow-bucket created in `minio_data/`. Verify MinIO bucket:
 `docker exec -it mlflow_minio ls -R /data`
 ->
@@ -78,7 +77,6 @@ You should see a mlflow-bucket created in `minio_data/`. Verify MinIO bucket:
 /data:
 mlflow-bucket
 ```
-
 
 ##⚙️ Backend Store
 
@@ -175,7 +173,38 @@ print("✅ metric and artifact logged!")
 
 Check in the MLflow UI: https://<your-domain>.
 
-## 📋 Migration Checklist
+## Backups & Restore
+
+MLflow in this stack stores:
+
+- Metadata (experiments, runs, registry) → in Postgres
+- Artifacts (models, logs, metrics files) → in MinIO
+
+Bak:
+
+```
+docker compose down
+tar czf backup_postgres.tgz -C postgres_data .
+tar czf backup_minio.tgz    -C minio_data .
+```
+
+Restore:
+
+```
+docker compose down
+rm -rf postgres_data/* minio_data/*
+tar xzf backup_postgres.tgz -C postgres_data
+tar xzf backup_minio.tgz    -C minio_data
+docker compose up -d
+```
+
+### Wipe:
+
+```
+sudo rm -rf postgres_data/* minio_data/* mlflow_data/*
+```
+
+### 📋 Migration Checklist
 
 When deploying on a fresh server:
 
