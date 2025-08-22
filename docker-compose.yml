@@ -32,6 +32,7 @@ services:
 
   minio-client:
     image: minio/mc
+    user: "1001:1001"
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
@@ -45,6 +46,7 @@ services:
 
   init-minio:
     image: minio/mc
+    user: "1001:1001"
     depends_on:
       - minio
     entrypoint: >
@@ -63,9 +65,22 @@ services:
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME}
 
+  postgres:
+    image: postgres:14
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
   mlflow_server:
     restart: always
     build: ./mlflow
+    user: "1001:1001"
     image: mlflow_server_with_boto3
     container_name: mlflow_server
     ports:
@@ -82,9 +97,10 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
       - AWS_S3_SIGNATURE_VERSION=s3v4
       - AWS_S3_ADDRESSING_STYLE=path
+      - TMPDIR=/mlflow_data/tmp
     command: >
       mlflow server
-      --backend-store-uri sqlite:////mlflow_data/mlflow.db
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       --host 0.0.0.0
       --serve-artifacts
       --artifacts-destination s3://${MINIO_BUCKET_NAME}
@@ -92,6 +108,7 @@ services:
       - ./mlflow_data:/mlflow_data
     depends_on:
       - minio
+      - postgres
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${MLFLOW_PORT}/"]
       interval: 30s
@@ -117,6 +134,7 @@ services:
 
   certbot:
     build: ./certbot
+    user: "1001:1001"
     container_name: certbot
     environment:
       - PORKBUN_API_KEY=${PORKBUN_API_KEY}
