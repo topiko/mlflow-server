@@ -74,6 +74,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
     ports:
       - "5432:5432"
 
@@ -141,6 +143,8 @@ services:
       - PORKBUN_SECRET_API_KEY=${PORKBUN_API_SECRET}
     volumes:
       - ./certbot_data:/etc/letsencrypt  # shared with nginx
+      - ./certbot_log:/var/log/letsencrypt
+      - ./certbot_work:/var/lib/letsencrypt
     command: >
       certonly
              --non-interactive
