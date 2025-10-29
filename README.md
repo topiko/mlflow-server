@@ -78,7 +78,7 @@ You should see a mlflow-bucket created in `minio_data/`. Verify MinIO bucket:
 mlflow-bucket
 ```
 
-##⚙️ Backend Store
+## ⚙️ Backend Store
 
 Metrics & metadata are stored in mlflow_data/mlflow.db (SQLite).
 
@@ -86,7 +86,7 @@ For production, you may want to swap SQLite with Postgres.
 
 HTTP Basic Auth is enabled in Nginx. To add a user:
 
-##🚀 Running the Stack
+## 🚀 Running the Stack
 
 Start:
 
@@ -102,7 +102,7 @@ sudo docker compose down
 
 Services are configured with restart: always, so they come back automatically after a reboot.
 
-##🔧 Environment Variables
+## 🔧 Environment Variables
 
 Create a .env file in the project root. Example:
 
@@ -159,7 +159,7 @@ From a client (with Python + mlflow installed):
 ```python3
 import mlflow
 
-mlflow.set_tracking_uri("https://<your-domain>")
+[mlflow.set_tracking_uri](mlflow.set_tracking_uri)("https://<your-domain>")
 mlflow.set_experiment("smoke-test")
 
 with mlflow.start_run():
