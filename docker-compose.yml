@@ -40,6 +40,8 @@ services:
       - MINIO_PORT=${MINIO_PORT}
       - MINIO_STORAGE_USE_HTTPS=${MINIO_STORAGE_USE_HTTPS}
       - MINIO_CONSOLE_ADDRESS=${MINIO_CONSOLE_ADDRESS}
+      - MC_CONFIG_DIR=/tmp
+      - XDG_CACHE_HOME=/tmp             # <— avoid /.cache warnings
     networks:
       - backend
 
@@ -91,6 +93,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
       - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
       - MLFLOW_S3_IGNORE_TLS=true
+      - MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE=true # We are behind nginx!
       - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME}
       - AWS_DEFAULT_REGION=us-east-1
       - AWS_S3_SIGNATURE_VERSION=s3v4
