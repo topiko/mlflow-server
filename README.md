@@ -201,7 +201,11 @@ docker compose up -d
 ### Wipe:
 
 ```
+docker compose down
 sudo rm -rf postgres_data/* minio_data/* mlflow_data/*
+docker compose --env-file .env up -d
+# WAIT for the minio to be healhy
+docker compose run --rm init-minio
 ```
 
 ### 📋 Migration Checklist
