@@ -47,7 +47,7 @@ Certificates will be stored under certbot_data/ and mounted into the Nginx conta
 
 ## 👤 Users & Authentication
 
-`htpasswd -c nginx/htpasswd/users <username>`
+`htpasswd nginx/htpasswd/users <username>`
 
 ## 📦 MLflow
 
