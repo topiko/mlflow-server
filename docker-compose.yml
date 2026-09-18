@@ -1,12 +1,8 @@
-version: "3.9"
-
 services:
-
-
   minio:
     restart: always
     user: "1001:1001"
-    image: minio/minio
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: mlflow_minio
     volumes:
       - ./minio_data:/data
@@ -19,27 +15,27 @@ services:
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-      - MINIO_ADDRESS=${MINIO_ADDRESS}
-      - MINIO_PORT=${MINIO_PORT}
+      - MINIO_ADDRESS=:9000
       - MINIO_STORAGE_USE_HTTPS=${MINIO_STORAGE_USE_HTTPS}
-      - MINIO_CONSOLE_ADDRESS=${MINIO_CONSOLE_ADDRESS}
+      - MINIO_CONSOLE_ADDRESS=:9001
     command: server /data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://localhost:9000/minio/health/ready"]
       interval: 10s
-      timeout: 20s
-      retries: 3
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   minio-client:
-    image: minio/mc
+    profiles: ["tools"]
+    image: &minio-client-image quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     user: "1001:1001"
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-      - MINIO_ADDRESS=${MINIO_ADDRESS}
-      - MINIO_PORT=${MINIO_PORT}
+      - MINIO_ADDRESS=:9000
       - MINIO_STORAGE_USE_HTTPS=${MINIO_STORAGE_USE_HTTPS}
-      - MINIO_CONSOLE_ADDRESS=${MINIO_CONSOLE_ADDRESS}
+      - MINIO_CONSOLE_ADDRESS=:9001
       - MC_CONFIG_DIR=/tmp
       - XDG_CACHE_HOME=/tmp             # <— avoid /.cache warnings
     networks:
@@ -47,9 +43,8 @@ services:
 
 
   init-minio:
-    image: minio/mc
-    entrypoint: ["/bin/sh","-c"]
-    command: ["./init-minio.sh"]
+    image: *minio-client-image
+    entrypoint: ["/bin/sh", "/init-minio.sh"]
     depends_on:
       minio:
         condition: service_healthy
@@ -65,7 +60,7 @@ services:
 
 
   postgres:
-    image: postgres:14
+    image: postgres:14.19@sha256:1c418702ab77adc7e84c7e726c2ab4f9cb63b8f997341ffcfab56629bab1429d
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -77,21 +72,25 @@ services:
       - backend
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   mlflow_server:
     restart: always
     build: ./mlflow
     image: mlflow_server_with_boto3
     container_name: mlflow_server
-    ports:
-      - "${MLFLOW_PORT}:5000"
     networks:
       - frontend
       - backend
     environment:
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
       - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - MLFLOW_S3_IGNORE_TLS=true
       - MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE=true # We are behind nginx!
       - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME}
@@ -114,17 +113,23 @@ services:
     volumes:
       - ./mlflow_data:/mlflow_data
     depends_on:
-      - minio
-      - postgres
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      init-minio:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${MLFLOW_PORT}/"]
-      interval: 30s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).close()"]
+      interval: 10s
       timeout: 10s
-      retries: 3
+      retries: 12
+      start_period: 60s
 
 
   nginx:
-    image: nginx:stable-alpine
+    restart: unless-stopped
+    image: nginx:1.28.0-alpine@sha256:8f2bcf97c473dfe311e79a510ee540ee02e28ce1e6a64e1ef89bfad32574ef10
     container_name: mlflow_nginx
     ports:
       - "80:80"
@@ -135,11 +140,14 @@ services:
       - ./nginx/ssl:/etc/nginx/ssl:ro
       - ./certbot_data:/etc/letsencrypt  # shared with Certbot
     depends_on:
-      - mlflow_server
+      mlflow_server:
+        condition: service_healthy
+        restart: true
     networks:
       - backend
 
   certbot:
+    profiles: ["tools"]
     build: ./certbot
     user: "1001:1001"
     container_name: certbot

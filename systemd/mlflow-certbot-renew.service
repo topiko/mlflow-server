@@ -1,0 +1,14 @@
+[Unit]
+Description=Renew MLflow TLS certificates and reload Nginx
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Deployment path on lefthand; adjust for another host.
+WorkingDirectory=/home/topiko/mlflow-server
+ExecStart=/usr/bin/docker compose run --rm --no-deps -T certbot renew --non-interactive
+ExecStart=/usr/bin/docker compose exec -T nginx nginx -t
+ExecStart=/usr/bin/docker compose exec -T nginx nginx -s reload
+TimeoutStartSec=30min

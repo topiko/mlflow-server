@@ -1,0 +1,27 @@
+# Generated from requirements.in with uv pip compile --python-version 3.14 --universal.
+# See README.md for the update procedure. Do not edit dependency pins here manually.
+acme==5.7.0
+certbot==5.7.0
+certbot-dns-porkbun==0.11.0
+certifi==2026.5.20
+cffi==2.0.0 ; platform_python_implementation != 'PyPy'
+charset-normalizer==3.4.7
+configargparse==1.7.5
+configobj==5.0.9
+cryptography==48.0.1
+distro==1.9.0
+dnspython==2.8.0
+filelock==3.32.0
+idna==3.18
+josepy==2.2.0
+parsedatetime==2.6
+pkb-client==2.3.1
+pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+pyopenssl==26.2.0
+pyrfc3339==2.1.0
+pywin32==312 ; sys_platform == 'win32'
+requests==2.34.2
+requests-file==3.0.1
+setuptools==82.0.1
+tldextract==5.3.1
+urllib3==2.7.0

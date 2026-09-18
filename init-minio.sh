@@ -9,8 +9,6 @@ mkdir -p "$MC_CONFIG_DIR"
 # Use env-based alias (no ~/.mc writes needed)
 # Requires MC_HOST_local env in compose
 echo "Ensuring bucket: ${MINIO_BUCKET_NAME}"
-mc ls local || true
-mc mb -p "local/${MINIO_BUCKET_NAME}" || true
+mc mb --ignore-existing "local/${MINIO_BUCKET_NAME}"
 mc ls "local/${MINIO_BUCKET_NAME}"
 echo "Done."
-

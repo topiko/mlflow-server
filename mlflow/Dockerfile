@@ -1,7 +1,4 @@
-FROM python:3.10-slim as base
+FROM python:3.10-slim@sha256:fd76ade0c607f27677bc04be3c60749f400eedc941d9e72967e19a4cedff80c2
 
-# Install MLflow 3+
-RUN pip install mlflow==3.10.0 boto3 psycopg2-binary
-
-# (Optional) Install tracing support for GenAI workflows
-# RUN pip install mlflow-tracing
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && pip check
