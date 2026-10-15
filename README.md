@@ -1,7 +1,8 @@
 # MLflow server
 
-Docker Compose deployment of MLflow with PostgreSQL for tracking metadata, MinIO
-for artifacts, and Nginx for HTTPS and HTTP Basic authentication. Certificates are
+Docker Compose deployment of MLflow with PostgreSQL for tracking metadata, a
+persistent server directory for artifacts, and Nginx for HTTPS and HTTP Basic
+authentication. Certificates are
 issued by Let's Encrypt using Certbot and Porkbun DNS validation.
 
 ## Maintenance quick reference
@@ -16,11 +17,13 @@ Use `sudo docker` if your account does not have Docker access.
 | Enable scheduled renewal | [Automatic renewal](#automatic-renewal) |
 | Add a user or change a login password | [MLflow login](#mlflow-login) |
 | Back up or recover the server | [Backup and restore](#backup-and-restore) |
+| Rehearse filesystem-artifact migration locally | [Local rehearsal guide](rehearsal/README.md) |
+| Review the production migration and rollback | [Migration record](rehearsal/PRODUCTION-MIGRATION.md) |
 | Check service status | `docker compose ps -a` |
-| Follow server logs | `docker compose logs -f --tail=100 nginx mlflow_server postgres minio` |
+| Follow server logs | `docker compose logs -f --tail=100 nginx mlflow_server postgres` |
 
-**Current automation:** Compose waits for healthy storage services and initializes
-the artifact bucket before starting MLflow. A host systemd timer for certificate
+**Current automation:** Compose waits for healthy PostgreSQL before starting
+MLflow, and for healthy MLflow before starting Nginx. A host systemd timer for certificate
 renewal is included; it must be installed and enabled once. Scheduled backups,
 retention, and restore testing are not implemented.
 
@@ -29,13 +32,21 @@ retention, and restore testing are not implemented.
 ```text
 Client --HTTPS / Basic Auth--> Nginx --> MLflow --> PostgreSQL (metadata)
                                           |
-                                          +----> MinIO (artifacts)
+                                          +----> artifacts_data/ (files)
 Certbot --Porkbun DNS API--> Let's Encrypt certificates --> Nginx
 ```
 
-MLflow proxies artifact uploads and downloads (`--serve-artifacts`), so clients
-using new experiments normally need only the tracking URL and Basic Auth login,
-not MinIO credentials. Older experiments retain their original artifact locations.
+MLflow proxies artifact uploads and downloads (`--serve-artifacts`). Clients need
+the tracking URL and Basic Auth login, not filesystem access to the server.
+`./artifacts_data` is mounted at `/mlflow_artifacts` inside the MLflow container.
+Experiments use `mlflow-artifacts:/...` locations so requests travel through MLflow.
+
+Production migrated from MinIO on **15 October 2026**. The full artifact export was
+checksum-verified, existing model downloads and new uploads passed, and no artifact
+URI rewrites were required. The original MinIO data is retained for rollback; see
+the [migration record](rehearsal/PRODUCTION-MIGRATION.md).
+On `lefthand`, a copy of that record is also stored at
+`/home/topiko/mlflow-backups/filesystem-migration-20261015T080226Z/PRODUCTION-MIGRATION.md`.
 
 MLflow has **no published host port**. Nginx connects to `mlflow_server:5000` over
 their shared Docker network; users and software connect to
@@ -51,20 +62,21 @@ test. Expect a brief interruption during recreation.
 | Host path | Purpose |
 | --- | --- |
 | `postgres_data/` | PostgreSQL 14 database: experiments, runs, metrics, parameters, registry metadata |
-| `minio_data/` | Artifact objects and MinIO internal state |
+| `artifacts_data/` | Active artifact files, including models and uploaded run files |
+| `minio_data/` | Retained pre-migration MinIO data; no longer the active artifact store |
 | `mlflow_data/` | MLflow working files, including `tmp/`; **not the active database** |
 | `certbot_data/` | Certificate history, private keys, renewal configuration, and `creds.ini` |
 | `certbot_log/`, `certbot_work/` | Certbot logs and working state |
 | `nginx/htpasswd/users` | Basic Auth usernames and password hashes |
-| `.env` | Database and MinIO credentials and service configuration |
+| `.env` | Database credentials and service configuration |
 
-The data directories are **bind mounts**, not Docker-managed named volumes. The
-named volumes declared at the bottom of `docker-compose.yml` are unused.
+The data directories are **bind mounts**, not Docker-managed named volumes.
 An old `mlflow_data/mlflow.db`, if present, is not used by the current configuration.
 
 Source configuration lives in `docker-compose.yml`, `nginx/nginx.conf`,
-`mlflow/Dockerfile`, `certbot/Dockerfile`, and `init-minio.sh`. The MLflow image uses
+`mlflow/Dockerfile`, and `certbot/Dockerfile`. The MLflow image uses
 Python 3.10 with MLflow 3.10.0, boto3, and psycopg2-binary.
+`init-minio.sh` is retained only for the archived rollback configuration.
 
 The current deployment is on **`lefthand`**, in `/home/topiko/mlflow-server`.
 It uses Docker Engine 28.2.2 and Compose 2.36.2 (inspected 18 September 2026).
@@ -88,14 +100,6 @@ in `nginx/nginx.conf`, and the domain and contact email in the Certbot command i
 Create `.env`:
 
 ```dotenv
-MINIO_BUCKET_NAME=mlflow-bucket
-
-MINIO_ROOT_USER=replace_with_minio_user
-MINIO_ROOT_PASSWORD=replace_with_long_random_password
-MINIO_STORAGE_USE_HTTPS=False
-MINIO_PORT=9000
-MINIO_CONSOLE_PORT=9001
-
 POSTGRES_USER=mlflow
 POSTGRES_PASSWORD=replace_with_another_long_random_password
 POSTGRES_DB=mlflowdb
@@ -105,9 +109,9 @@ PORKBUN_API_KEY=replace_with_porkbun_key
 PORKBUN_API_SECRET=replace_with_porkbun_secret
 ```
 
-`MINIO_PORT` and `MINIO_CONSOLE_PORT` control MinIO's host port mappings.
-Container addresses and health checks use fixed internal ports independently.
-An existing `MLFLOW_PORT` entry can be removed from `.env`; it is no longer used.
+Container addresses and health checks use fixed internal ports. `MLFLOW_PORT` and
+the old `MINIO_*` variables are no longer used by the active stack. Keep the old
+MinIO credentials with the rollback configuration until that retention period ends.
 Credentials are interpolated directly into connection URLs; long random
 alphanumeric passwords avoid URL-escaping problems with this configuration.
 
@@ -115,16 +119,16 @@ Prepare directories for a **new installation**:
 
 ```bash
 chmod 600 .env
-mkdir -p minio_data postgres_data mlflow_data/tmp \
+mkdir -p artifacts_data postgres_data mlflow_data/tmp \
   certbot_data certbot_log certbot_work nginx/htpasswd nginx/ssl
-sudo chown -R 1001:1001 minio_data certbot_data certbot_log certbot_work
+sudo chown -R 1001:1001 certbot_data certbot_log certbot_work
 ```
 
-MinIO and Certbot explicitly run as UID/GID `1001:1001`. Match ownership to those
-IDs, or change the corresponding Compose `user` settings to suit your host.
-PostgreSQL manages its own data-directory ownership; do not apply the MinIO UID
-to it. Keep local data and secrets out of Git; the current `.gitignore` is missing
-`postgres_data/` and `certbot_work/`.
+Certbot explicitly runs as UID/GID `1001:1001`. Match ownership to those IDs, or
+change its Compose `user` setting to suit your host. MLflow currently runs as root
+inside its container and must be able to write `artifacts_data/`. PostgreSQL manages
+its own data-directory ownership. Runtime data and the local `.rehearsal/` snapshot
+are excluded from Git.
 
 ### 2. Configure certificates and authentication
 
@@ -154,11 +158,9 @@ docker compose up -d --wait --wait-timeout 300
 docker compose ps -a
 ```
 
-`init-minio` waits for healthy MinIO and creates the bucket idempotently. MLflow
-waits for healthy PostgreSQL and MinIO and successful bucket initialization; Nginx
-waits for MLflow's `/health` endpoint. Initialization errors stop startup instead
-of being ignored. Certbot and the interactive MinIO client use the `tools` profile
-and run only when explicitly requested, such as `docker compose run --rm certbot`.
+MLflow waits for healthy PostgreSQL; Nginx waits for MLflow's `/health` endpoint.
+Certbot uses the `tools` profile and runs only when explicitly requested, such as
+`docker compose run --rm certbot`. No MinIO service or image pull is required.
 
 To stop the stack without deleting data:
 
@@ -166,7 +168,7 @@ To stop the stack without deleting data:
 docker compose down --timeout 120
 ```
 
-MinIO and MLflow have `restart: always`; PostgreSQL and Nginx have
+MLflow has `restart: always`; PostgreSQL and Nginx have
 `restart: unless-stopped`. Compose also restarts Nginx when it explicitly updates
 MLflow, so Nginx resolves the new container IP. Health-based dependency ordering
 applies to Compose startup; Docker's reboot restarts do not rerun that ordering.
@@ -297,23 +299,19 @@ The file is bind-mounted into Nginx; password-file changes apply to subsequent
 requests without rebuilding containers. This is a shared Basic Auth gate, not
 per-user MLflow permissions: authenticated users share access to the server.
 
-### MinIO and PostgreSQL credentials
+### PostgreSQL credentials
 
-- **MinIO:** update `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` in `.env`, then run
-  `docker compose up -d --force-recreate minio mlflow_server nginx`. MLflow currently
-  uses the MinIO root credentials, so both services need the new values. Pause
-  clients during rotation and run the smoke test afterward.
-- **PostgreSQL:** changing `.env` alone does **not** change the password in an
-  existing database. Open an interactive database session:
+Changing `.env` alone does **not** change the password in an existing database.
+Open an interactive database session:
 
-  ```bash
-  docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-  ```
+```bash
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
 
-  Use `\password` to change the current role's password, then `\q` to exit. Update
-  `.env` and run `docker compose up -d --force-recreate postgres mlflow_server nginx`.
-  Keep the existing username and database name. Pause clients during this
-  operation; avoid putting the new password in shell history.
+Use `\password` to change the current role's password, then `\q` to exit. Update
+`.env` and run `docker compose up -d --force-recreate postgres mlflow_server nginx`.
+Keep the existing username and database name. Pause clients during this operation;
+avoid putting the new password in shell history.
 
 Include Nginx when recreating MLflow so the proxy resolves its current container
 IP. The dependency restart setting also handles explicit Compose restarts.
@@ -328,12 +326,10 @@ Dockerfiles, matching the images inspected on `lefthand` on 18 September 2026:
 | MLflow / Python | 3.10.0 / 3.10.21 |
 | PostgreSQL | 14.19 |
 | Nginx | 1.28.0 |
-| MinIO | RELEASE.2025-09-07T16-13-09Z |
-| MinIO client | RELEASE.2025-08-13T08-35-41Z |
 | Certbot / Porkbun plugin | 5.7.0 / 0.11.0 |
 
-MinIO and its client use `quay.io/minio` because the previous Docker Hub references
-were unavailable to anonymous pulls. Their digests match the deployed images.
+MinIO is no longer a runtime dependency. Its old server/client images were archived
+on `lefthand` for rollback because upstream anonymous pulls were unavailable.
 
 `mlflow/requirements.txt` and `certbot/requirements.txt` pin direct and transitive
 Python dependencies. Their `requirements.in` files hold the direct dependencies.
@@ -374,9 +370,9 @@ To update deliberately:
 
 **Backups are not automated.** The procedure below is a manual, full offline
 backup. It trades downtime for a simple, consistent snapshot of PostgreSQL and
-MinIO. Downtime grows with the size of the artifact store.
+`artifacts_data/`. Downtime grows with the size of the artifact store.
 
-PostgreSQL metadata and MinIO artifacts must be restored as a matching pair.
+PostgreSQL metadata and artifact files must be restored as a matching pair.
 Backing up only the database does not preserve models and other artifacts.
 
 ### Create a backup
@@ -384,13 +380,21 @@ Backing up only the database does not preserve models and other artifacts.
 Pause client jobs and other writers first. Do not run Certbot or change
 credentials while archiving. If installed, pause the renewal timer as described
 above and wait for its service to finish before backup or restore; resume it after
-maintenance. This Bash block stops on failure without exiting your interactive shell:
+maintenance. Choose an existing backup destination with enough free space for the
+database and artifacts, preferably on another disk or off-host-mounted storage.
+During MinIO rollback retention, `lefthand` has insufficient free space for another
+full uncompressed copy; do not rely on compression to make it fit.
+
+Set the destination below before running this Bash block. It stops on failure
+without exiting your interactive shell:
 
 ```bash
 (
   set -eu
   umask 077
-  backup="$HOME/mlflow-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+  backup_root="/path/to/backup-storage/mlflow"
+  test -d "$backup_root"
+  backup="$backup_root/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$backup"
   printf 'Backup directory: %s\n' "$backup"
 
@@ -401,7 +405,7 @@ maintenance. This Bash block stops on failure without exiting your interactive s
 
   docker compose down --timeout 120
   sudo tar --numeric-owner -czf - \
-    postgres_data minio_data mlflow_data certbot_data .env nginx/htpasswd \
+    postgres_data artifacts_data mlflow_data certbot_data .env nginx/htpasswd \
     > "$backup/state.tgz"
   tar -tzf "$backup/state.tgz" >/dev/null
   sha256sum < "$backup/state.tgz" > "$backup/state.tgz.sha256"
@@ -411,7 +415,7 @@ maintenance. This Bash block stops on failure without exiting your interactive s
 Bring services back up using the [startup procedure](#3-start-services), including
 its readiness check. Do this even if archiving failed; treat a failed archive as
 incomplete. Do not copy a running `postgres_data/` with `tar`. Include the whole
-`minio_data/`, including hidden internal files, and the whole `certbot_data/`,
+`artifacts_data/`, including hidden files, and the whole `certbot_data/`,
 since `live/` contains symlinks into `archive/`.
 
 Store an encrypted copy off the server: the archive contains database contents,
@@ -423,8 +427,12 @@ configuration separately as well.
 
 ### Restore a backup
 
-This is a **physical PostgreSQL backup**. Restore with PostgreSQL **14** and the
-same MinIO and MLflow versions first; do upgrades separately. A physical backup
+The `state.tgz` recipe above produces a **physical PostgreSQL backup**. Migration
+checkpoints named `metadata.dump` are logical `pg_dump` archives; see the
+[migration record](rehearsal/PRODUCTION-MIGRATION.md) for those checkpoints.
+
+Restore a physical backup with PostgreSQL **14** and the
+same MLflow version first; do upgrades separately. A physical backup
 cannot be restored directly into a different PostgreSQL major version. Use a
 logical dump (`pg_dump` / `pg_restore`) for that kind of migration.
 
@@ -436,7 +444,7 @@ logical dump (`pg_dump` / `pg_restore`) for that kind of migration.
 2. Set the archive path and verify it:
 
    ```bash
-   backup="$HOME/mlflow-backups/REPLACE_WITH_BACKUP_TIMESTAMP"
+   backup="/path/to/backup-storage/mlflow/REPLACE_WITH_BACKUP_TIMESTAMP"
    sha256sum --check "$backup/state.tgz.sha256" < "$backup/state.tgz"
    tar -tzf "$backup/state.tgz"
    ```
@@ -455,7 +463,7 @@ logical dump (`pg_dump` / `pg_restore`) for that kind of migration.
      mkdir -m 700 "$rollback"
      mkdir "$rollback/nginx"
      printf 'Previous state: %s\n' "$rollback"
-     for path in postgres_data minio_data mlflow_data certbot_data .env nginx/htpasswd; do
+     for path in postgres_data artifacts_data mlflow_data certbot_data .env nginx/htpasswd; do
        if [ -e "$path" ]; then
          sudo mv "$path" "$rollback/$path"
        fi
@@ -469,18 +477,17 @@ logical dump (`pg_dump` / `pg_restore`) for that kind of migration.
    containers. If `.env` was restored with another host user's UID, change only
    its ownership to your current user and retain mode `600`.
 
-4. Start PostgreSQL and MinIO, verify readiness, and inspect startup logs:
+4. Start PostgreSQL, verify readiness, and inspect startup logs:
 
    ```bash
-   docker compose up -d postgres minio
-   docker compose run --rm init-minio
+   docker compose up -d --wait postgres
    docker compose exec postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-   docker compose logs --tail=100 postgres minio
+   docker compose logs --tail=100 postgres
    ```
 
-   Proceed once PostgreSQL accepts connections and MinIO is healthy. The init
-   command checks the bucket; it does not restore missing artifacts. If the
-   restored certificate has expired, renew it before starting Nginx.
+   Proceed once PostgreSQL accepts connections. The artifact directory must have
+   been restored alongside the database. If the restored certificate has expired,
+   renew it before starting Nginx.
 
 5. Start MLflow and Nginx with `docker compose up -d mlflow_server nginx`. Verify
    an **existing** experiment, run, and artifact download, then run the smoke test
@@ -530,17 +537,14 @@ Check the run in the MLflow UI. Clear the client password afterward with
 
 These are review findings, not features already implemented:
 
-1. **Limit storage-service host ports.** Compose still publishes PostgreSQL
-   (`5432`) and MinIO (`9000` / `9001`) on all host interfaces. Internet access
-   depends on router and firewall rules. Remove these mappings if external
-   administration does not need them, or bind them to localhost; MLflow reaches
-   both services over Docker's internal network.
+1. **Limit the PostgreSQL host port.** Compose still publishes PostgreSQL (`5432`)
+   on all host interfaces. Internet access depends on router and firewall rules.
+   Remove the mapping if external administration does not need it, or bind it to
+   localhost; MLflow reaches PostgreSQL over Docker's internal network.
 2. **Automate paired backups and rehearse recovery (deferred).** Schedule backups with
    retention and encrypted off-host storage, and periodically restore them on an
    isolated host. If offline copies become too slow, use PostgreSQL logical dumps
-   plus a coordinated MinIO backup, pausing writes to preserve consistency.
-3. **Simplify configuration and reduce credential scope.** Use a bucket-scoped
-   MinIO account for MLflow rather than root credentials. Remove duplicate Porkbun
-   environment variables, add a checked-in `.env.example`, ignore all runtime
-   directories, and remove unused volumes and stale Nginx HTTP-challenge settings
+   plus a coordinated artifact-directory backup, pausing writes to preserve consistency.
+3. **Simplify configuration.** Remove duplicate Porkbun environment variables,
+   add a checked-in `.env.example`, and remove stale Nginx HTTP-challenge settings
    (this setup uses DNS validation). Parameterize the domain, email, and UID/GID.

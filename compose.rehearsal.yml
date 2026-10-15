@@ -1,0 +1,85 @@
+name: mlflow-rehearsal
+
+services:
+  postgres:
+    image: postgres:14.19@sha256:1c418702ab77adc7e84c7e726c2ab4f9cb63b8f997341ffcfab56629bab1429d
+    environment:
+      POSTGRES_USER: rehearsal
+      POSTGRES_PASSWORD: local-rehearsal-only
+      POSTGRES_DB: mlflow_rehearsal
+    volumes:
+      - ./.rehearsal/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "rehearsal", "-d", "mlflow_rehearsal"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  mlflow:
+    build: ./mlflow
+    image: mlflow-rehearsal:3.10.0
+    networks:
+      - default
+      - frontend
+    ports:
+      - "127.0.0.1:15000:5000"
+    command:
+      - mlflow
+      - server
+      - --backend-store-uri
+      - postgresql://rehearsal:local-rehearsal-only@postgres:5432/mlflow_rehearsal
+      - --host
+      - 0.0.0.0
+      - --workers
+      - "1"
+      - --allowed-hosts
+      - localhost:*,127.0.0.1:*,mlflow:*
+      - --serve-artifacts
+      - --artifacts-destination
+      - /mlflow_artifacts
+    environment:
+      MLFLOW_ENABLE_TELEMETRY: "false"
+    volumes:
+      - ./.rehearsal/snapshot/artifacts:/mlflow_artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).close()"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 60s
+
+  check:
+    profiles: ["check"]
+    image: mlflow-rehearsal:3.10.0
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    entrypoint: ["python", "/rehearsal/verify.py"]
+    command:
+      - --tracking-uri
+      - http://mlflow:5000
+      - --manifest
+      - /snapshot/artifacts.json
+      - --report
+      - /results/report.json
+    environment:
+      MLFLOW_ENABLE_TELEMETRY: "false"
+      MLFLOW_ENABLE_ARTIFACTS_PROGRESS_BAR: "false"
+      PYTHONDONTWRITEBYTECODE: "1"
+      USER: rehearsal
+      HOME: /tmp
+      GIT_PYTHON_REFRESH: quiet
+    volumes:
+      - ./rehearsal:/rehearsal:ro
+      - ./.rehearsal/snapshot/artifacts.json:/snapshot/artifacts.json:ro
+      - ./.rehearsal/results:/results
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+networks:
+  default:
+    internal: true
+  frontend:
+    driver: bridge

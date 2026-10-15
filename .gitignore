@@ -2,6 +2,10 @@ mlflow_data/
 duck_ml.log
 .env
 minio_data/
+artifacts_data/
+postgres_data/
 certbot_data/
 certbot_log/
-
+certbot_work/
+.rehearsal/
+__pycache__/

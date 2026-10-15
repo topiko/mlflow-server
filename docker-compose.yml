@@ -1,64 +1,4 @@
 services:
-  minio:
-    restart: always
-    user: "1001:1001"
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
-    container_name: mlflow_minio
-    volumes:
-      - ./minio_data:/data
-    ports:
-      - "${MINIO_PORT}:9000"
-      - "${MINIO_CONSOLE_PORT}:9001"
-    networks:
-      - frontend
-      - backend
-    environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-      - MINIO_ADDRESS=:9000
-      - MINIO_STORAGE_USE_HTTPS=${MINIO_STORAGE_USE_HTTPS}
-      - MINIO_CONSOLE_ADDRESS=:9001
-    command: server /data
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://localhost:9000/minio/health/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
-  minio-client:
-    profiles: ["tools"]
-    image: &minio-client-image quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
-    user: "1001:1001"
-    environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-      - MINIO_ADDRESS=:9000
-      - MINIO_STORAGE_USE_HTTPS=${MINIO_STORAGE_USE_HTTPS}
-      - MINIO_CONSOLE_ADDRESS=:9001
-      - MC_CONFIG_DIR=/tmp
-      - XDG_CACHE_HOME=/tmp             # <— avoid /.cache warnings
-    networks:
-      - backend
-
-
-  init-minio:
-    image: *minio-client-image
-    entrypoint: ["/bin/sh", "/init-minio.sh"]
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      MC_HOST_local: "http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000"
-      MINIO_BUCKET_NAME: "${MINIO_BUCKET_NAME}"
-    volumes:
-      - ./init-minio.sh:/init-minio.sh:ro
-    working_dir: /
-    networks:
-      - backend     # <<< same network as minio
-    restart: "no"
-
-
   postgres:
     image: postgres:14.19@sha256:1c418702ab77adc7e84c7e726c2ab4f9cb63b8f997341ffcfab56629bab1429d
     restart: unless-stopped
@@ -85,19 +25,9 @@ services:
     image: mlflow_server_with_boto3
     container_name: mlflow_server
     networks:
-      - frontend
       - backend
     environment:
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-      - MLFLOW_S3_IGNORE_TLS=true
-      - MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE=true # We are behind nginx!
-      - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME}
-      - AWS_DEFAULT_REGION=us-east-1
-      - AWS_S3_SIGNATURE_VERSION=s3v4
-      - AWS_S3_FORCE_PATH_STYLE=true   # ✅ honored by boto3
-      - AWS_EC2_METADATA_DISABLED=true
+      - MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE=true # Nginx provides the public gate.
       - TMPDIR=/mlflow_data/tmp
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB}
@@ -109,23 +39,19 @@ services:
       --host 0.0.0.0
       --workers 1
       --serve-artifacts
-      --artifacts-destination s3://${MINIO_BUCKET_NAME}
+      --artifacts-destination /mlflow_artifacts
     volumes:
       - ./mlflow_data:/mlflow_data
+      - ./artifacts_data:/mlflow_artifacts
     depends_on:
-      minio:
-        condition: service_healthy
       postgres:
         condition: service_healthy
-      init-minio:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).close()"]
       interval: 10s
       timeout: 10s
       retries: 12
       start_period: 60s
-
 
   nginx:
     restart: unless-stopped
@@ -138,7 +64,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/htpasswd:/etc/nginx/htpasswd:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
-      - ./certbot_data:/etc/letsencrypt  # shared with Certbot
+      - ./certbot_data:/etc/letsencrypt
     depends_on:
       mlflow_server:
         condition: service_healthy
@@ -155,7 +81,7 @@ services:
       - PORKBUN_API_KEY=${PORKBUN_API_KEY}
       - PORKBUN_SECRET_API_KEY=${PORKBUN_API_SECRET}
     volumes:
-      - ./certbot_data:/etc/letsencrypt  # shared with nginx
+      - ./certbot_data:/etc/letsencrypt
       - ./certbot_log:/var/log/letsencrypt
       - ./certbot_work:/var/lib/letsencrypt
     command: >
@@ -169,12 +95,6 @@ services:
              --dns-porkbun-propagation-seconds 60
              -d ml.twohands.dev
 
-volumes:
-  db_data:
-  minio_data:
-
 networks:
-  frontend:
-    driver: bridge
   backend:
     driver: bridge
