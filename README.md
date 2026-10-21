@@ -75,7 +75,7 @@ An old `mlflow_data/mlflow.db`, if present, is not used by the current configura
 
 Source configuration lives in `docker-compose.yml`, `nginx/nginx.conf`,
 `mlflow/Dockerfile`, and `certbot/Dockerfile`. The MLflow image uses
-Python 3.10 with MLflow 3.10.0, boto3, and psycopg2-binary.
+Python 3.12 with MLflow 3.17.2, boto3, and psycopg2-binary.
 `init-minio.sh` is retained only for the archived rollback configuration.
 
 The current deployment is on **`lefthand`**, in `/home/topiko/mlflow-server`.
@@ -319,11 +319,12 @@ IP. The dependency restart setting also handles explicit Compose restarts.
 ## Pinned versions and updates
 
 External images are pinned to immutable multi-platform digests in Compose and the
-Dockerfiles, matching the images inspected on `lefthand` on 18 September 2026:
+Dockerfiles. MLflow and its Python base were updated on 21 October 2026; the other
+image pins match the deployment inspected on 18 September 2026:
 
 | Component | Pinned version |
 | --- | --- |
-| MLflow / Python | 3.10.0 / 3.10.21 |
+| MLflow / Python | 3.17.2 / 3.12.15 |
 | PostgreSQL | 14.19 |
 | Nginx | 1.28.0 |
 | Certbot / Porkbun plugin | 5.7.0 / 0.11.0 |
@@ -333,8 +334,11 @@ on `lefthand` for rollback because upstream anonymous pulls were unavailable.
 
 `mlflow/requirements.txt` and `certbot/requirements.txt` pin direct and transitive
 Python dependencies. Their `requirements.in` files hold the direct dependencies.
-The Python 3.10 MLflow and Python 3.14 Certbot pins match the deployed dependency
-versions. The base-image layer hashes were also matched to the running build.
+The Python 3.12 MLflow and Python 3.14 Certbot pins match the deployed dependency
+versions. MLflow's input requirement is `mlflow>=3`; the generated requirements
+still pin the exact deployed release. The MLflow image refreshes system CA
+certificates, bootstraps pip 26.2.2 from a SHA-256-verified wheel, and requires
+`certifi>=2026.10.19` to address the eMudhra certificate incident.
 
 To update deliberately:
 
@@ -344,7 +348,7 @@ To update deliberately:
    [uv](https://docs.astral.sh/uv/) installed, regenerate the locks:
 
    ```bash
-   uv pip compile mlflow/requirements.in --python-version 3.10 --universal \
+   uv pip compile mlflow/requirements.in --python-version 3.12 --universal \
      --upgrade --no-annotate --output-file mlflow/requirements.txt
    uv pip compile certbot/requirements.in --python-version 3.14 --universal \
      --upgrade --no-annotate --output-file certbot/requirements.txt
@@ -361,6 +365,11 @@ To update deliberately:
    docker compose up -d --wait --wait-timeout 300
    docker compose run --rm certbot renew --dry-run
    ```
+
+   For MLflow upgrades requiring a database migration, test `mlflow db upgrade`
+   against a restored database copy first. Pause writers, stop Nginx and MLflow,
+   and take a fresh database backup before applying the migration to production.
+   Recreate MLflow and Nginx together afterward.
 
    Run the client smoke test, including artifact download. Both Dockerfiles also
    run `pip check` during the build. Refresh pins deliberately for security updates;
